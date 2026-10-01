@@ -1,105 +1,20 @@
-const State={user:null,permissions:{},master:{},dashboard:null,pengajuan:[],route:'dashboard'};
-const $=(s,r=document)=>r.querySelector(s), $$=(s,r=document)=>[...r.querySelectorAll(s)];
-const money=n=>'Rp '+Number(n||0).toLocaleString('id-ID');
-const dateFmt=s=>s?new Date(s).toLocaleDateString('id-ID',{day:'2-digit',month:'short',year:'numeric'}):'-';
-function toast(msg,type=''){const e=$('#toast');e.textContent=msg;e.className='toast show '+type;setTimeout(()=>e.className='toast',2800)}
-function esc(v=''){return String(v).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]))}
-
-document.addEventListener('DOMContentLoaded',init);
-async function init(){
-  bindStatic();
-  if(localStorage.getItem('sim_sppd_token')){
-    try{await bootstrap();showApp();await Promise.all([loadDashboard(),loadPengajuan()]);return}catch(e){localStorage.removeItem('sim_sppd_token')}
-  }
-  $('#loginView').classList.remove('hidden');
-}
-function bindStatic(){
-  $('#loginForm').addEventListener('submit',login);
-  $('#logoutBtn').addEventListener('click',logout);
-  $('#menuBtn').addEventListener('click',()=>$('#sidebar').classList.toggle('open'));
-  $('#modalClose').addEventListener('click',closeModal);
-  $('#modal').addEventListener('click',e=>{if(e.target.id==='modal')closeModal()});
-  $$('.nav[data-route]').forEach(b=>b.addEventListener('click',()=>navigate(b.dataset.route)));
-  $$('[data-go]').forEach(b=>b.addEventListener('click',()=>navigate(b.dataset.go)));
-  $('#newPengajuanBtn').addEventListener('click',()=>openPengajuanForm());
-  $('#searchPengajuan').addEventListener('input',debounce(renderPengajuan,180));
-  $('#statusFilter').addEventListener('change',renderPengajuan);
-}
-async function login(e){
-  e.preventDefault();const btn=e.submitter;btn.disabled=true;btn.textContent='Memeriksa...';
-  try{const r=await API.login($('#loginEmail').value,$('#loginPassword').value);localStorage.setItem('sim_sppd_token',r.data.token);await bootstrap();showApp();await Promise.all([loadDashboard(),loadPengajuan()]);toast('Login berhasil.')}
-  catch(err){toast(err.message,'error')}finally{btn.disabled=false;btn.textContent='Masuk'}
-}
-async function logout(){try{await API.logout()}catch{}localStorage.removeItem('sim_sppd_token');location.reload()}
-async function bootstrap(){const r=await API.bootstrap();State.user=r.data.user;State.permissions=r.data.permissions;State.master=r.data.master}
-function showApp(){
-  $('#loginView').classList.add('hidden');$('#appView').classList.remove('hidden');
-  $('#userName').textContent=State.user.nama;$('#userRole').textContent=State.user.role.replace('_',' ');$('#avatar').textContent=(State.user.nama||'A')[0].toUpperCase();
-  $('#newPengajuanBtn').style.display=State.permissions.pengajuan_create?'':'none';
-}
-function navigate(route){
-  State.route=route;$$('.nav[data-route]').forEach(n=>n.classList.toggle('active',n.dataset.route===route));
-  $$('.route').forEach(s=>s.classList.remove('active'));
-  const built=['dashboard','pengajuan'].includes(route), target=$('#route-'+(built?route:'placeholder'));target.classList.add('active');
-  const titles={dashboard:['Dashboard','Ringkasan perjalanan dinas'],pengajuan:['Pengajuan','Pengajuan dan verifikasi perjalanan dinas']};
-  const t=titles[route]||[route[0].toUpperCase()+route.slice(1),'Modul pengembangan berikutnya'];$('#pageTitle').textContent=t[0];$('#pageSub').textContent=t[1];
-  $('#sidebar').classList.remove('open');
-}
-async function loadDashboard(){try{const r=await API.dashboard();State.dashboard=r.data;renderDashboard()}catch(e){toast(e.message,'error')}}
-function renderDashboard(){
-  const c=State.dashboard.cards;
-  $('#kpiGrid').innerHTML=[
-    ['Perjalanan Bulan Ini',c.totalBulanIni],['Total Estimasi',money(c.totalEstimasi)],['Menunggu Proses',c.pending],['Diverifikasi',c.disetujui]
-  ].map(x=>`<div class="kpi"><span>${x[0]}</span><b>${x[1]}</b></div>`).join('');
-  const status=State.dashboard.status||{}, total=Math.max(1,Object.values(status).reduce((a,b)=>a+b,0));
-  $('#statusBars').innerHTML=Object.entries(status).map(([k,v])=>`<div class="status-row"><div class="status-meta"><span>${esc(k)}</span><b>${v}</b></div><div class="bar"><i style="width:${v/total*100}%"></i></div></div>`).join('')||'<p class="muted">Belum ada data.</p>';
-  $('#latestList').innerHTML=(State.dashboard.terbaru||[]).map(r=>`<div class="latest-item"><div><b>${esc(r.nomor_pengajuan)}</b><div class="muted">${esc(r.nama_pelaksana)} • ${esc(r.tujuan_lokasi)}</div></div><span class="badge ${esc(r.status)}">${esc(r.status)}</span></div>`).join('')||'<p class="muted">Belum ada pengajuan.</p>';
-}
-async function loadPengajuan(){try{const r=await API.pengajuanList();State.pengajuan=r.data||[];renderPengajuan()}catch(e){toast(e.message,'error')}}
-function renderPengajuan(){
-  const q=$('#searchPengajuan').value.toLowerCase(),st=$('#statusFilter').value;
-  const rows=State.pengajuan.filter(r=>(!st||r.status===st)&&(!q||JSON.stringify(r).toLowerCase().includes(q)));
-  $('#pengajuanBody').innerHTML=rows.map(r=>`<tr><td><b>${esc(r.nomor_pengajuan)}</b></td><td>${esc(r.nama_pelaksana)}</td><td>${esc(r.tujuan_lokasi)}</td><td>${dateFmt(r.tanggal_berangkat)} – ${dateFmt(r.tanggal_kembali)}</td><td>${money(r.estimasi_biaya)}</td><td><span class="badge ${esc(r.status)}">${esc(r.status)}</span></td><td><button class="link-btn" onclick="viewPengajuan('${esc(r.id_pengajuan)}')">Detail</button></td></tr>`).join('')||'<tr><td colspan="7" class="muted">Belum ada data yang sesuai.</td></tr>';
-}
-function openPengajuanForm(existing=null){
-  const draft=existing||JSON.parse(localStorage.getItem(CONFIG.DRAFT_KEY)||'null')||{};
-  const locs=(State.master.lokasi||[]).map(l=>`<option value="${esc(l.lokasi_id)}" ${draft.tujuan_lokasi_id===l.lokasi_id?'selected':''}>${esc(l.nama_lokasi)}</option>`).join('');
-  $('#modalBody').innerHTML=`<h2>${existing?'Edit':'Pengajuan Baru'}</h2><p class="muted">Draft disimpan lokal secara otomatis agar input tidak hilang.</p>
-  <form id="pengajuanForm" class="form-grid">
-   <input type="hidden" name="id_pengajuan" value="${esc(draft.id_pengajuan||'')}">
-   <label>Tujuan Lokasi<select name="tujuan_lokasi_id" required><option value="">Pilih lokasi</option>${locs}</select></label>
-   <label>Alat Angkut<input name="alat_angkut" value="${esc(draft.alat_angkut||'Kendaraan Dinas')}"></label>
-   <label>Tanggal Berangkat<input type="date" name="tanggal_berangkat" value="${esc(draft.tanggal_berangkat||'')}" required></label>
-   <label>Tanggal Kembali<input type="date" name="tanggal_kembali" value="${esc(draft.tanggal_kembali||'')}" required></label>
-   <label class="full">Dasar Perjalanan<textarea name="dasar_perjalanan" rows="2" required>${esc(draft.dasar_perjalanan||'')}</textarea></label>
-   <label class="full">Tujuan Kegiatan<textarea name="tujuan_kegiatan" rows="2" required>${esc(draft.tujuan_kegiatan||'')}</textarea></label>
-   <label class="full">Maksud Perjalanan<textarea name="maksud_perjalanan" rows="2">${esc(draft.maksud_perjalanan||'')}</textarea></label>
-   <label>Waktu Kegiatan<input type="time" name="waktu_kegiatan" value="${esc(draft.waktu_kegiatan||'')}"></label>
-   <label>Tempat Kegiatan<input name="tempat_kegiatan" value="${esc(draft.tempat_kegiatan||'')}"></label>
-   <label>Jarak (KM)<input type="number" min="0" name="jarak_km" value="${esc(draft.jarak_km||'')}"></label>
-   <label>Estimasi Biaya (opsional)<input type="number" min="0" name="estimasi_biaya" value="${esc(draft.estimasi_biaya||'')}"></label>
-   <div class="form-actions full"><button type="button" id="saveDraftBtn" class="btn secondary">Simpan Draft</button><button type="submit" class="btn primary">Ajukan</button></div>
-  </form>`;
-  $('#modal').classList.remove('hidden');
-  const f=$('#pengajuanForm');f.addEventListener('input',debounce(()=>localStorage.setItem(CONFIG.DRAFT_KEY,JSON.stringify(Object.fromEntries(new FormData(f)))),350));
-  $('#saveDraftBtn').addEventListener('click',()=>saveForm(true));f.addEventListener('submit',e=>{e.preventDefault();saveForm(false,e.submitter)});
-}
-async function saveForm(draft,btn){
-  const f=$('#pengajuanForm'),data=Object.fromEntries(new FormData(f));
-  if(btn){btn.disabled=true;btn.textContent='Mengirim...'}
-  try{const r=draft?await API.saveDraft(data):await API.submitPengajuan(data);localStorage.removeItem(CONFIG.DRAFT_KEY);toast(r.message);closeModal();await Promise.all([loadPengajuan(),loadDashboard()])}
-  catch(e){toast(e.message,'error')}finally{if(btn){btn.disabled=false;btn.textContent='Ajukan'}}
-}
-function viewPengajuan(id){
-  const r=State.pengajuan.find(x=>x.id_pengajuan===id);if(!r)return;
-  const canVerify=State.permissions.pengajuan_verify&&r.status==='DIAJUKAN';
-  $('#modalBody').innerHTML=`<h2>${esc(r.nomor_pengajuan)}</h2><div class="detail-grid">
-  ${[['Pelaksana',r.nama_pelaksana],['Status',r.status],['Tujuan',r.tujuan_lokasi],['Tanggal',dateFmt(r.tanggal_berangkat)+' – '+dateFmt(r.tanggal_kembali)],['Dasar',r.dasar_perjalanan],['Tujuan Kegiatan',r.tujuan_kegiatan],['Estimasi',money(r.estimasi_biaya)],['Catatan',r.catatan_verifikator||'-']].map(x=>`<div class="detail-box"><small>${x[0]}</small><b>${esc(x[1])}</b></div>`).join('')}</div>
-  ${canVerify?`<label>Catatan Verifikator<textarea id="verifyNote" rows="3"></textarea></label><div class="form-actions"><button class="btn danger" onclick="verifyPengajuan('${esc(id)}','REJECT')">Tolak</button><button class="btn primary" onclick="verifyPengajuan('${esc(id)}','APPROVE')">Setujui</button></div>`:''}`;
-  $('#modal').classList.remove('hidden');
-}
-async function verifyPengajuan(id,decision){
-  try{const r=await API.verify({id_pengajuan:id,decision,catatan:$('#verifyNote')?.value||''});toast(r.message);closeModal();await Promise.all([loadPengajuan(),loadDashboard()])}catch(e){toast(e.message,'error')}
-}
-function closeModal(){$('#modal').classList.add('hidden');$('#modalBody').innerHTML=''}
-function debounce(fn,ms){let t;return(...a)=>{clearTimeout(t);t=setTimeout(()=>fn(...a),ms)}}
+const S={u:null,p:{},m:{},pg:[],rows:[]},$=s=>document.querySelector(s),$$=s=>[...document.querySelectorAll(s)],E=v=>String(v??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[c])),Rp=n=>"Rp "+Number(n||0).toLocaleString("id-ID"),Dt=s=>s?new Date(s).toLocaleDateString("id-ID"):"-";
+const N=[["dashboard","▦","Dashboard"],["pengajuan","▤","Pengajuan"],["surat","▧","Surat Tugas"],["sppd","▥","SPPD"],["laporan","▨","Laporan"],["biaya","Rp","Pertanggungjawaban"],["arsip","▣","Arsip Digital"],["admin","⚙","Admin"]];
+function toast(m,c=""){let x=$("#toast");x.textContent=m;x.className="toast show "+c;setTimeout(()=>x.className="toast",2600)}function modal(h){$("#modalBody").innerHTML=h;$("#modal").classList.remove("hidden")}function closeM(){$("#modal").classList.add("hidden")}
+document.addEventListener("DOMContentLoaded",async()=>{$("#loginForm").onsubmit=login;$("#logoutBtn").onclick=logout;$("#menuBtn").onclick=()=>$("#sidebar").classList.toggle("open");$("#modalClose").onclick=closeM;if(localStorage.getItem("sim_sppd_token"))try{await boot();show();return go("dashboard")}catch{}$("#loginView").classList.remove("hidden")});
+async function login(e){e.preventDefault();try{let r=await API.login($("#loginEmail").value,$("#loginPassword").value);localStorage.setItem("sim_sppd_token",r.data.token);await boot();show();go("dashboard")}catch(x){toast(x.message,"error")}}async function logout(){try{await API.logout()}catch{}localStorage.removeItem("sim_sppd_token");location.reload()}async function boot(){let r=await API.boot();S.u=r.data.user;S.p=r.data.permissions;S.m=r.data.master;S.pg=(await API.pg()).data||[]}
+function show(){$("#loginView").classList.add("hidden");$("#appView").classList.remove("hidden");$("#userName").textContent=S.u.nama;$("#userRole").textContent=S.u.role;$("#avatar").textContent=S.u.nama[0];$("#mainNav").innerHTML=N.filter(x=>x[0]!="admin"||S.u.role=="ADMIN").map(x=>`<button class=nav data-r="${x[0]}">${x[1]} <span>${x[2]}</span></button>`).join("");$$("[data-r]").forEach(b=>b.onclick=()=>go(b.dataset.r))}
+async function go(r){$$("[data-r]").forEach(x=>x.classList.toggle("active",x.dataset.r==r));$("#sidebar").classList.remove("open");let M={dashboard:["Dashboard","Ringkasan perjalanan dinas"],pengajuan:["Pengajuan","Pengajuan dan verifikasi"],surat:["Surat Tugas","Penerbitan dan approval"],sppd:["SPPD","Surat Perjalanan Dinas"],laporan:["Laporan","Laporan hasil perjalanan"],biaya:["Pertanggungjawaban","Realisasi dan verifikasi biaya"],arsip:["Arsip Digital","Repository dokumen"],admin:["Admin","User, master data, pengaturan dan audit"]}[r];$("#pageTitle").textContent=M[0];$("#pageSub").textContent=M[1];try{r=="dashboard"?await dash():r=="pengajuan"?await pgPage():r=="admin"?await adminPage():await modulePage(r)}catch(e){toast(e.message,"error")}}
+async function dash(){let d=(await API.dash()).data,c=d.cards;$("#page").innerHTML=`<div class=summary-grid>${[["Perjalanan Bulan Ini",c.totalBulanIni],["Total Estimasi",Rp(c.totalEstimasi)],["Menunggu Proses",c.pending],["Diverifikasi",c.disetujui]].map(x=>`<div class=summary><span class=muted>${x[0]}</span><b>${x[1]}</b></div>`).join("")}</div><div class=grid-2><div class=card><h3>Status Pengajuan</h3>${Object.entries(d.status||{}).map(([k,v])=>`<p><span class="badge ${k}">${k}</span> <b>${v}</b></p>`).join("")||"<p>Belum ada data</p>"}</div><div class=card><h3>Pengajuan Terbaru</h3>${(d.terbaru||[]).map(x=>`<div class=latest-item><div><b>${E(x.nomor_pengajuan)}</b><div class=muted>${E(x.nama_pelaksana)} • ${E(x.tujuan_lokasi)}</div></div><span class="badge ${x.status}">${x.status}</span></div>`).join("")}</div></div>`}
+async function pgPage(){S.pg=(await API.pg()).data||[];$("#page").innerHTML=`<div class=page-head><div><h3>Pengajuan Perjalanan Dinas</h3><p>Draft, submit, verifikasi dan tracking status.</p></div>${S.p.pengajuan_create?'<button class="btn primary" id=np>+ Pengajuan Baru</button>':""}</div><div class=card>${table(S.pg,["nomor_pengajuan","nama_pelaksana","tujuan_lokasi","tanggal_berangkat","estimasi_biaya","status"],"pg")}</div>`;if($("#np"))$("#np").onclick=pgForm}
+function table(rows,cols,type=""){return `<div class=table-wrap><table><thead><tr>${cols.map(c=>`<th>${c.replaceAll("_"," ")}</th>`).join("")}${type?"<th>Aksi</th>":""}</tr></thead><tbody>${rows.map((x,i)=>`<tr>${cols.map(c=>`<td>${c.includes("biaya")||c=="total_realisasi"?Rp(x[c]):c.includes("tanggal")?Dt(x[c]):c=="status"?`<span class="badge ${x[c]}">${E(x[c])}</span>`:c=="drive_url"&&x[c]?`<a target=_blank href="${E(x[c])}">Buka</a>`:E(x[c]||"-")}</td>`).join("")}${type?`<td><button class=mini-btn onclick="${type=="pg"?`pgDetail('${x.id_pengajuan}')`:`modDetail('${type}',${i})`}">Detail</button></td>`:""}</tr>`).join("")||`<tr><td colspan="${cols.length+(type?1:0)}">Belum ada data.</td></tr>`}</tbody></table></div>`}
+function pgForm(){let o=(S.m.lokasi||[]).map(x=>`<option value="${x.lokasi_id}">${E(x.nama_lokasi)}</option>`).join("");modal(`<h2>Pengajuan Baru</h2><form id=f class=form-grid><label>Tujuan<select name=tujuan_lokasi_id required><option value="">Pilih</option>${o}</select></label><label>Alat Angkut<input name=alat_angkut value="Kendaraan Dinas"></label><label>Tanggal Berangkat<input type=date name=tanggal_berangkat required></label><label>Tanggal Kembali<input type=date name=tanggal_kembali required></label><label class=full>Dasar<textarea name=dasar_perjalanan required></textarea></label><label class=full>Tujuan Kegiatan<textarea name=tujuan_kegiatan required></textarea></label><label class=full>Maksud<textarea name=maksud_perjalanan></textarea></label><label>Jarak KM<input type=number name=jarak_km></label><label>Estimasi<input type=number name=estimasi_biaya></label><div class="form-actions full"><button type=button class="btn secondary" id=dr>Draft</button><button class="btn primary">Ajukan</button></div></form>`);$("#dr").onclick=()=>savePg(1);$("#f").onsubmit=e=>{e.preventDefault();savePg(0)}}
+async function savePg(d){try{let x=Object.fromEntries(new FormData($("#f"))),r=d?await API.draft(x):await API.submit(x);toast(r.message);closeM();pgPage()}catch(e){toast(e.message,"error")}}function pgDetail(id){let x=S.pg.find(a=>a.id_pengajuan==id),v=S.p.pengajuan_verify&&x.status=="DIAJUKAN";modal(`<h2>${E(x.nomor_pengajuan)}</h2><div class=detail-grid>${Object.entries(x).filter(([k])=>["nama_pelaksana","tujuan_lokasi","dasar_perjalanan","tujuan_kegiatan","estimasi_biaya","status"].includes(k)).map(([k,z])=>`<div class=detail-box><small>${k}</small><b>${E(z)}</b></div>`).join("")}</div>${v?`<label>Catatan<textarea id=note></textarea></label><div class=form-actions><button class="btn danger" onclick="verifyPg('${id}','REJECT')">Tolak</button><button class="btn primary" onclick="verifyPg('${id}','APPROVE')">Setujui</button></div>`:""}`)}async function verifyPg(id,decision){try{toast((await API.verify({id_pengajuan:id,decision,catatan:$("#note")?.value||""})).message);closeM();pgPage()}catch(e){toast(e.message,"error")}}
+const MM={surat:["Surat Tugas","Generate, preview, dan approval Kepala Desa","surat_read",["id_surat","id_pengajuan","nomor_surat","status"]],sppd:["SPPD","Kelola lembar SPPD","sppd_edit",["id_sppd","id_pengajuan","nomor_sppd","status"]],laporan:["Laporan Perjalanan","Draft, review, revisi dan persetujuan","laporan_edit",["id_laporan","id_pengajuan","status"]],biaya:["Pertanggungjawaban Biaya","Realisasi dan verifikasi Bendahara","biaya_edit",["id_biaya","id_pengajuan","total_realisasi","status"]],arsip:["Arsip Digital","Repository dokumen perjalanan",null,["id_arsip","id_pengajuan","jenis_dokumen","nama_file","drive_url"]]};
+async function modulePage(m){let z=MM[m];S.rows=(await API.list(m)).data||[];$("#page").innerHTML=`<div class=page-head><div><h3>${z[0]}</h3><p>${z[1]}</p></div>${z[2]&&S.p[z[2]]?'<button class="btn primary" id=nm>+ Tambah</button>':""}</div><div class=summary-grid>${[["Total",S.rows.length],["Draft",S.rows.filter(x=>x.status=="DRAFT").length],["Diproses",S.rows.filter(x=>x.status&&!["DRAFT","DISETUJUI"].includes(x.status)).length],["Disetujui",S.rows.filter(x=>x.status=="DISETUJUI").length]].map(x=>`<div class=summary><span class=muted>${x[0]}</span><b>${x[1]}</b></div>`).join("")}</div><div class=card>${table(S.rows,z[3],m)}</div>`;if($("#nm"))$("#nm").onclick=()=>modForm(m)}
+function modForm(m){let p=S.pg.map(x=>`<option value="${x.id_pengajuan}">${E(x.nomor_pengajuan)} — ${E(x.tujuan_lokasi)}</option>`).join(""),ex=m=="surat"?'<label>Nomor Surat<input name=nomor_surat></label>':m=="sppd"?'<label>Nomor SPPD<input name=nomor_sppd></label>':m=="biaya"?'<label>Total Realisasi<input type=number name=total_realisasi></label>':"";modal(`<h2>Tambah ${MM[m][0]}</h2><form id=mf><input type=hidden name=module value="${m}"><label>Pengajuan<select name=id_pengajuan required><option value="">Pilih</option>${p}</select></label>${ex}<div class=form-actions><button class="btn primary">Simpan</button></div></form>`);$("#mf").onsubmit=async e=>{e.preventDefault();try{toast((await API.save(Object.fromEntries(new FormData(e.target)))).message);closeM();modulePage(m)}catch(x){toast(x.message,"error")}}}
+function modDetail(m,i){let x=S.rows[i],id=x.id_surat||x.id_laporan||x.id_biaya||x.id_sppd||x.id_arsip,ok=m=="surat"&&S.p.surat_approve||m=="laporan"&&S.p.laporan_verify||m=="biaya"&&S.p.biaya_verify;modal(`<h2>Detail ${MM[m][0]}</h2><div class=detail-grid>${Object.entries(x).map(([k,v])=>`<div class=detail-box><small>${k}</small><b>${E(v||"-")}</b></div>`).join("")}</div>${ok?`<div class=form-actions><button class="btn primary" onclick="approve('${m}','${id}')">Setujui</button></div>`:""}`)}async function approve(m,id){try{toast((await API.action({module:m,id,action:"APPROVE"})).message);closeM();modulePage(m)}catch(e){toast(e.message,"error")}}
+async function adminPage(){let a=(await API.admin()).data;window.A=a;$("#page").innerHTML=`<div class=page-head><div><h3>Administrasi Sistem</h3><p>User/RBAC, master data, pengaturan dan audit.</p></div></div><div class=admin-grid><div class=admin-menu>${[["users","User & RBAC"],["aparatur","Master Aparatur"],["jabatan","Master Jabatan"],["lokasi","Master Lokasi"],["biaya","Standar Biaya"],["settings","Pengaturan"],["audit","Audit Log"]].map((x,i)=>`<button ${i?'':'class=active'} onclick="adminTab('${x[0]}',this)">${x[1]}</button>`).join("")}</div><div id=ac></div></div>`;adminTab("users")}
+function adminTab(t,b){if(b){$$(".admin-menu button").forEach(x=>x.classList.remove("active"));b.classList.add("active")}let a=window.A;if(t=="users")$("#ac").innerHTML=`<div class=card><div class=card-head><h3>User & RBAC</h3><button class="btn primary" onclick=userForm()>+ User</button></div>${table(a.users,["nama","email","role","aktif","last_login"])}</div>`;else if(["aparatur","jabatan","lokasi","biaya"].includes(t))$("#ac").innerHTML=`<div class=card><div class=card-head><h3>Master ${t}</h3><button class="btn primary" onclick="masterForm('${t}')">+ Tambah</button></div>${table(a[t],Object.keys(a[t][0]||{}).slice(0,6))}</div>`;else if(t=="settings"){$("#ac").innerHTML=`<div class=card><h3>Pengaturan</h3><form id=cf>${["DESA","KECAMATAN","KABUPATEN","PROVINSI","KEPALA_DESA","TAHUN_AKTIF"].map(k=>`<label>${k}<input name="${k}" value="${E(a.config[k]||"")}"></label>`).join("")}<button class="btn primary">Simpan</button></form></div>`;$("#cf").onsubmit=async e=>{e.preventDefault();try{toast((await API.cfg(Object.fromEntries(new FormData(e.target)))).message)}catch(x){toast(x.message,"error")}}}else $("#ac").innerHTML=`<div class=card><h3>Audit Log</h3>${table(a.audit,["timestamp","email","role","action","entity","entity_id"])}</div>`}
+function userForm(){modal(`<h2>Tambah User</h2><form id=uf><label>Nama<input name=nama required></label><label>Email<input type=email name=email required></label><label>Role<select name=role>${["ADMIN","SEKRETARIS","KEPALA_DESA","PELAKSANA","BENDAHARA"].map(x=>`<option>${x}</option>`).join("")}</select></label><label>Aparatur ID<input name=aparatur_id></label><label>Password Awal<input name=password value=User1234></label><div class=form-actions><button class="btn primary">Simpan</button></div></form>`);$("#uf").onsubmit=async e=>{e.preventDefault();try{toast((await API.user(Object.fromEntries(new FormData(e.target)))).message);closeM();adminPage()}catch(x){toast(x.message,"error")}}}
+function masterForm(t){let f={aparatur:["nik","nipd","nama","jabatan_id","jabatan","email","telepon"],jabatan:["nama_jabatan","kelompok"],lokasi:["nama_lokasi","kabupaten_kota","provinsi","jarak_km"],biaya:["tahun","jenis","satuan","tarif"]}[t];modal(`<h2>Tambah Master ${t}</h2><form id=mm><input type=hidden name=type value="${t}">${f.map(k=>`<label>${k}<input name="${k}" required></label>`).join("")}<div class=form-actions><button class="btn primary">Simpan</button></div></form>`);$("#mm").onsubmit=async e=>{e.preventDefault();try{toast((await API.master(Object.fromEntries(new FormData(e.target)))).message);closeM();adminPage()}catch(x){toast(x.message,"error")}}}
